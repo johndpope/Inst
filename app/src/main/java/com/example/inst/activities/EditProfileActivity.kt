@@ -1,6 +1,12 @@
 package com.example.inst.activities
 
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.support.v4.content.FileProvider
 import android.support.v7.app.AppCompatActivity
 import android.widget.TextView
 import com.example.inst.R
@@ -12,13 +18,22 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageReference
 import kotlinx.android.synthetic.main.activity_edit_profile.*
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
-class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
+class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener {
+    private val TAKE_PICTURE_REQUEST_CODE = 1
     private lateinit var mUser: User
     private lateinit var mPendingUser: User
     private lateinit var mAuth: FirebaseAuth
     private lateinit var mDatabase: DatabaseReference
+    private lateinit var mStorage: StorageReference
+    private lateinit var mImageUri: Uri
+    private val simpleDateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,8 +43,12 @@ class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
 
         save_image.setOnClickListener { updateProfile() }
 
+        change_photo_text.setOnClickListener { takeCameraPicture() }
+
         mAuth = FirebaseAuth.getInstance()
         mDatabase = FirebaseDatabase.getInstance().reference
+        mStorage = FirebaseStorage.getInstance().reference
+
         mDatabase.child("users").child(mAuth.currentUser!!.uid)
             .addListenerForSingleValueEvent(ValueEventListenerAdapter {
                 mUser = it.getValue(User::class.java)!!
@@ -39,7 +58,49 @@ class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
                 bio_input.setText(mUser.bio, TextView.BufferType.EDITABLE)
                 email_input.setText(mUser.email, TextView.BufferType.EDITABLE)
                 phone_input.setText(mUser.phone, TextView.BufferType.EDITABLE)
-        })
+            })
+    }
+
+    private fun takeCameraPicture() {
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        if (intent.resolveActivity(packageManager) != null) {
+            val imageFile = createImageFile()
+            mImageUri = FileProvider.getUriForFile(this, "com.example.inst.fileprovider", imageFile)
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, mImageUri)
+            startActivityForResult(intent, TAKE_PICTURE_REQUEST_CODE)
+        }
+    }
+
+    private fun createImageFile(): File {
+        val storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        return File.createTempFile(
+            "JPEG_${simpleDateFormat.format(Date())}_",
+            ".jpg",
+            storageDir
+        )
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == TAKE_PICTURE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
+            val uid = mAuth.currentUser!!.uid
+            val ref = mStorage.child("users/$uid/photo")
+            ref.putFile(mImageUri).addOnCompleteListener {
+                if (it.isSuccessful) {
+                    ref.downloadUrl.addOnCompleteListener {
+                        val photoUrl = it.result.toString()
+                        mDatabase.child("users/$uid/photo").setValue(photoUrl).addOnCompleteListener {
+                            if (it.isSuccessful) {
+
+                            } else {
+                                showToast(it.exception!!.message!!)
+                            }
+                        }
+                    }
+                } else {
+                    showToast(it.exception!!.message!!)
+                }
+            }
+        }
     }
 
     private fun updateProfile() {
@@ -49,10 +110,10 @@ class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
         if (error == null) {
             if (mPendingUser.email == mUser.email) {
                 updateUser(mPendingUser)
-            } else{
+            } else {
                 PasswordDialog().show(supportFragmentManager, "PasswordDialog")
             }
-        }else {
+        } else {
             showToast(error)
         }
     }
@@ -61,9 +122,9 @@ class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
         val updatesMap = mutableMapOf<String, Any>()
 
         if (user.name != mUser.name) updatesMap["name"] = user.name
-        if (user.username!= mUser.username) updatesMap["username"] = user.username
+        if (user.username != mUser.username) updatesMap["username"] = user.username
         if (user.website != mUser.website) updatesMap["website"] = user.website
-        if (user.bio!= mUser.bio) updatesMap["bio"] = user.bio
+        if (user.bio != mUser.bio) updatesMap["bio"] = user.bio
         if (user.email != mUser.email) updatesMap["email"] = user.email
         if (user.phone != mUser.phone) updatesMap["phone"] = user.phone
 
@@ -75,12 +136,13 @@ class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
 
     private fun readInputs(): User {
         return User(
-                name = name_input.text.toString(),
-                username = username_input.text.toString(),
-                website = website_input.text.toString(),
-                bio = bio_input.text.toString(),
-                email = email_input.text.toString(),
-                phone = phone_input.text.toString())
+            name = name_input.text.toString(),
+            username = username_input.text.toString(),
+            website = website_input.text.toString(),
+            bio = bio_input.text.toString(),
+            email = email_input.text.toString(),
+            phone = phone_input.text.toString()
+        )
     }
 
     private fun validate(user: User): String? = when {
@@ -101,7 +163,7 @@ class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
         } else showToast("You should enter your password")
     }
 
-    private fun DatabaseReference.updateUser(uid: String, updates: Map<String, Any>, onSuccess: () -> Unit){
+    private fun DatabaseReference.updateUser(uid: String, updates: Map<String, Any>, onSuccess: () -> Unit) {
         child("users").child(uid).updateChildren(updates)
             .addOnCompleteListener {
                 if (it.isSuccessful) {
@@ -126,7 +188,7 @@ class EditProfileActivity : AppCompatActivity(), PasswordDialog.Listener{
         reauthenticate(credential).addOnCompleteListener {
             if (it.isSuccessful) {
                 onSuccess()
-            } else{
+            } else {
                 showToast(it.exception!!.message!!)
             }
         }
